@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
+# OPTIONAL - only needed when rebuilding; authorizing + assigning IPs by hand in ZeroTier Central works too.
 # Usage: ZT_API_TOKEN=xxx ZT_NETWORK_ID=xxx ./zt-authorize.sh controller=<id> compute1=<id> storage=<id>
-# Authorizes each member and pins its static IP (keep in sync with inventory/hosts.yml).
 set -euo pipefail
 : "${ZT_API_TOKEN:?set ZT_API_TOKEN}"; : "${ZT_NETWORK_ID:?set ZT_NETWORK_ID}"
 declare -A IPS=( [controller]=10.0.1.4 [compute1]=10.0.1.6 [storage]=10.0.1.7 )
