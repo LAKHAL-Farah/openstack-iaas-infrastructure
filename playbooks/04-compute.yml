@@ -1,0 +1,54 @@
+- hosts: g_compute
+  become: true
+  tasks:
+    - name: CPU virtualization flags
+      ansible.builtin.shell: egrep -c '(vmx|svm)' /proc/cpuinfo
+      register: vmx
+      changed_when: false
+      failed_when: false
+
+    - name: Hardware virtualization exposed
+      ansible.builtin.assert:
+        that: vmx.stdout | int > 0
+        fail_msg: "No VT-x/AMD-V. In VMware: VM Settings > Processors > enable 'Virtualize Intel VT-x/EPT'."
+
+    - name: /dev/kvm present
+      ansible.builtin.stat:
+        path: /dev/kvm
+      register: kvm
+    - ansible.builtin.assert:
+        that: kvm.stat.exists
+        fail_msg: "/dev/kvm missing (try: sudo modprobe kvm_intel / kvm_amd)"
+
+    - name: Provider NIC exists
+      ansible.builtin.stat:
+        path: "/sys/class/net/{{ provider_nic }}"
+      register: pnic
+    - ansible.builtin.assert:
+        that: pnic.stat.exists
+        fail_msg: "{{ provider_nic }} not found. Add the 2nd NIC (VMnet10) and fix provider_nic in group_vars."
+
+    - name: Provider NIC - up, no IP (reserved for OVS/Neutron)
+      ansible.builtin.copy:
+        dest: /etc/netplan/60-provider.yaml
+        mode: "0600"
+        content: |
+          network:
+            version: 2
+            ethernets:
+              {{ provider_nic }}:
+                dhcp4: false
+                dhcp6: false
+                optional: true
+      notify: Apply netplan
+
+    - name: Flush handlers now
+      ansible.builtin.meta: flush_handlers
+
+    - name: Bring provider NIC up
+      ansible.builtin.command: "ip link set {{ provider_nic }} up"
+      changed_when: false
+
+  handlers:
+    - name: Apply netplan
+      ansible.builtin.command: netplan apply

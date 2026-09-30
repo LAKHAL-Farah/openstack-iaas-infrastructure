@@ -1,0 +1,29 @@
+- hosts: openstack_nodes
+  become: true
+  tasks:
+    - name: Find ZeroTier interface for our network
+      ansible.builtin.shell: >
+        zerotier-cli -j listnetworks |
+        jq -r '.[] | select(.id=="{{ zt_network_id }}") | .portDeviceName'
+      register: zt_dev
+      changed_when: false
+
+    - name: ZeroTier interface exists and carries the expected IP
+      ansible.builtin.assert:
+        that:
+          - zt_dev.stdout | length > 0
+          - node_ip in (ansible_facts[zt_dev.stdout].ipv4.address | default(''))
+        fail_msg: "ZeroTier not up / wrong IP on {{ inventory_hostname }} (expected {{ node_ip }})"
+
+    - name: Record interface name for Kolla (Vol 2)
+      ansible.builtin.copy:
+        dest: /etc/openstack-lab.env
+        content: |
+          NODE_IP={{ node_ip }}
+          ZT_IFACE={{ zt_dev.stdout }}
+          VIP={{ internal_vip }}
+        mode: "0644"
+
+    - name: Show result
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: {{ zt_dev.stdout }} = {{ node_ip }}"

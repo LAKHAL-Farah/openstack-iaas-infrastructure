@@ -1,0 +1,26 @@
+# ---- Single source of truth. Edit here only. ----
+zt_network_id: "REPLACE_WITH_YOUR_16_CHAR_NETWORK_ID"
+zt_subnet: "10.0.1.0/24"
+internal_vip: "10.0.1.5"          # reserved for Kolla/Keepalived, NOT assigned to any node
+
+timezone: "UTC"
+base_packages: [chrony, python3-pip, python3-venv, python3-dev, libffi-dev, gcc, libssl-dev,
+                git, curl, jq, net-tools, nfs-common, lvm2, xfsprogs, cpu-checker]
+upgrade_packages: true
+
+# Preflight policy (lab-grade: latency is a warning, heavy loss is a blocker)
+mtu_probe_payload: 1372           # 1372 + 28 = 1400-byte IPv4 packet
+max_loss_pct: 20
+latency_warn_ms: 50
+min_mem_mb: { controller: 14000, compute1: 8000, storage: 7000 }
+min_cpus: 4
+
+# Compute
+provider_nic: ens37               # 2nd NIC (VMnet10), up, NO IP - reserved for OVS/Neutron
+
+# Storage (verify with lsblk before running!)
+os_disk: /dev/sda
+cinder_disk: /dev/sdb
+swift_disk: /dev/sdc
+cinder_vg: cinder-volumes
+glance_export_dir: /srv/glance-images

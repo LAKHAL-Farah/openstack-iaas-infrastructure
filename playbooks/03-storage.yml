@@ -1,0 +1,79 @@
+- hosts: g_storage
+  become: true
+  tasks:
+    - name: Gather mounts for safety check
+      ansible.builtin.setup:
+        gather_subset: [hardware]
+
+    - name: Safety - devices exist and are not the OS disk
+      ansible.builtin.assert:
+        that:
+          - cinder_disk != os_disk
+          - swift_disk != os_disk
+          - cinder_disk in ansible_facts.devices | map('regex_replace', '^', '/dev/') | list
+          - swift_disk in ansible_facts.devices | map('regex_replace', '^', '/dev/') | list
+          - ansible_facts.mounts | selectattr('device', 'match', cinder_disk ~ '|' ~ swift_disk) | list | length == 0
+        fail_msg: "Disk layout unexpected. Check lsblk and inventory/group_vars/all.yml"
+
+    - name: Install storage packages
+      ansible.builtin.apt:
+        name: [nfs-kernel-server, lvm2, xfsprogs, parted]
+        state: present
+
+    # ---- Cinder LVM ----
+    - name: Cinder volume group
+      community.general.lvg:
+        vg: "{{ cinder_vg }}"
+        pvs: "{{ cinder_disk }}"
+      when: not ansible_check_mode
+
+    # ---- Swift: Kolla expects GPT partition named KOLLA_SWIFT_DATA, XFS label d0, UNMOUNTED ----
+    - name: Swift partition
+      community.general.parted:
+        device: "{{ swift_disk }}"
+        label: gpt
+        number: 1
+        name: KOLLA_SWIFT_DATA
+        part_start: 0%
+        part_end: 100%
+        state: present
+      when: not ansible_check_mode
+
+    - name: Swift XFS filesystem (label d0)
+      community.general.filesystem:
+        fstype: xfs
+        dev: "{{ swift_disk }}1"
+        opts: "-L d0"
+      when: not ansible_check_mode
+
+    # ---- Glance NFS ----
+    - name: Glance export directory
+      ansible.builtin.file:
+        path: "{{ glance_export_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Glance export (owned by automation)
+      ansible.builtin.copy:
+        dest: /etc/exports
+        content: "{{ glance_export_dir }} {{ zt_subnet }}(rw,sync,no_subtree_check,no_root_squash)\n"
+        mode: "0644"
+      notify: Re-export
+
+    - name: NFS server running
+      ansible.builtin.service:
+        name: nfs-kernel-server
+        state: started
+        enabled: true
+
+    - name: Report
+      ansible.builtin.shell: vgs {{ cinder_vg }}; lsblk -o NAME,SIZE,FSTYPE,LABEL,PARTLABEL,MOUNTPOINTS; exportfs -v
+      register: report
+      changed_when: false
+      failed_when: false
+    - ansible.builtin.debug:
+        var: report.stdout_lines
+
+  handlers:
+    - name: Re-export
+      ansible.builtin.command: exportfs -ra

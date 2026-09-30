@@ -1,0 +1,10 @@
+# Run ONCE with --ask-become-pass. Everything after is passwordless.
+- hosts: openstack_nodes
+  become: true
+  tasks:
+    - name: Passwordless sudo for the automation user
+      ansible.builtin.copy:
+        dest: "/etc/sudoers.d/90-{{ ansible_user }}"
+        content: "{{ ansible_user }} ALL=(ALL) NOPASSWD:ALL\n"
+        mode: "0440"
+        validate: "visudo -cf %s"

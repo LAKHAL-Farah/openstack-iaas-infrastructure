@@ -1,0 +1,64 @@
+- hosts: openstack_nodes
+  become: true
+  tasks:
+    - name: Resources meet minimums
+      ansible.builtin.assert:
+        that:
+          - ansible_memtotal_mb >= min_mem_mb[inventory_hostname]
+          - ansible_processor_vcpus >= min_cpus
+        fail_msg: "{{ inventory_hostname }}: {{ ansible_memtotal_mb }} MB / {{ ansible_processor_vcpus }} vCPU below minimum"
+
+    - name: Swap is off
+      ansible.builtin.assert:
+        that: ansible_swaptotal_mb == 0
+
+    - name: Probe every peer with a 1400-byte don't-fragment ping
+      ansible.builtin.shell: "ping -c 5 -W 2 -M do -s {{ mtu_probe_payload }} -q {{ hostvars[item].node_ip }}"
+      loop: "{{ groups['openstack_nodes'] | difference([inventory_hostname]) }}"
+      register: probes
+      changed_when: false
+      failed_when: false
+
+    - name: BLOCKER - packet loss above policy
+      ansible.builtin.assert:
+        that: (item.stdout | regex_search('([0-9]+)% packet loss', '\\1') | default(['100'], true) | first | int) <= max_loss_pct
+        fail_msg: "{{ inventory_hostname }} -> {{ item.item }}: loss too high (or 1400B path blocked)"
+      loop: "{{ probes.results }}"
+      loop_control: { label: "{{ item.item }}" }
+
+    - name: WARNING - latency above target
+      ansible.builtin.debug:
+        msg: >-
+          WARN {{ inventory_hostname }} -> {{ item.item }}: avg {{ item.stdout | regex_search('= [0-9.]+/([0-9.]+)/', '\\1') | first }} ms (target under {{ latency_warn_ms }})
+      when: (item.stdout | regex_search('= [0-9.]+/([0-9.]+)/', '\\1') | default(['9999'], true) | first | float) > latency_warn_ms
+      loop: "{{ probes.results }}"
+      loop_control: { label: "{{ item.item }}" }
+
+- hosts: g_compute
+  become: true
+  tasks:
+    - name: KVM usable
+      ansible.builtin.command: kvm-ok
+      changed_when: false
+
+- hosts: g_storage
+  become: true
+  tasks:
+    - name: Cinder VG present
+      ansible.builtin.command: "vgs {{ cinder_vg }}"
+      changed_when: false
+    - name: Swift partition labelled for Kolla
+      ansible.builtin.shell: "lsblk -no PARTLABEL {{ swift_disk }}1 | grep -qx KOLLA_SWIFT_DATA"
+      changed_when: false
+
+- hosts: g_control
+  become: true
+  tasks:
+    - name: NFS mount+write test against storage
+      ansible.builtin.shell: |
+        set -e
+        d=$(mktemp -d)
+        mount -t nfs storage:{{ glance_export_dir }} $d
+        touch $d/.preflight && rm $d/.preflight
+        umount $d && rmdir $d
+      changed_when: false
