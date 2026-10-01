@@ -1,0 +1,45 @@
+# Self-service (VXLAN tenant net + router) + provider (flat ext-net) + image/flavors/keypair/secgroup. Idempotent.
+- name: Build the base cloud
+  hosts: g_control
+  gather_facts: true
+  vars:
+    os: "source {{ kolla_venv }}/bin/activate && source /etc/kolla/admin-openrc.sh && openstack"
+    steps:
+      - { chk: "{{ os }} network show ext-net",       create: "network create --external --provider-network-type flat --provider-physical-network physnet1 ext-net" }
+      - { chk: "{{ os }} subnet show ext-subnet",     create: "subnet create --network ext-net --subnet-range {{ provider_cidr }} --gateway {{ provider_gateway }} --allocation-pool start={{ provider_pool_start }},end={{ provider_pool_end }} --no-dhcp ext-subnet" }
+      - { chk: "{{ os }} network show tenant-net",    create: "network create tenant-net" }
+      - { chk: "{{ os }} subnet show tenant-subnet",  create: "subnet create --network tenant-net --subnet-range {{ tenant_cidr }} --gateway {{ tenant_gateway }} --dns-nameserver {{ tenant_dns }} tenant-subnet" }
+      - { chk: "{{ os }} router show demo-router",    create: "router create demo-router" }
+      - { chk: "{{ os }} router show demo-router -f value -c external_gateway_info | grep -q network_id", create: "router set --external-gateway ext-net demo-router" }
+      - { chk: "[ -n \"$({{ os }} port list --router demo-router --device-owner network:router_interface -f value -c ID)\" ]", create: "router add subnet demo-router tenant-subnet" }
+      - { chk: "{{ os }} flavor show m1.tiny",         create: "flavor create --vcpus 1 --ram 512 --disk 1 m1.tiny" }
+      - { chk: "{{ os }} flavor show m1.small",        create: "flavor create --vcpus 1 --ram 2048 --disk 10 m1.small" }
+      - { chk: "{{ os }} image show cirros-0.6.2",     create: "image create --disk-format qcow2 --container-format bare --public --file /tmp/cirros-0.6.2.img cirros-0.6.2" }
+      - { chk: "[ -n \"$({{ os }} security group rule list default --protocol icmp --ingress -f value -c ID)\" ]", create: "security group rule create --proto icmp default" }
+      - { chk: "[ -n \"$({{ os }} security group rule list default --protocol tcp --ingress -f value -c ID)\" ]",  create: "security group rule create --proto tcp --dst-port 22 default" }
+      - { chk: "{{ os }} keypair show lab-key",        create: "keypair create --public-key {{ ansible_env.HOME }}/.ssh/id_ed25519.pub lab-key" }
+  tasks:
+    - name: Download CirrOS test image
+      ansible.builtin.get_url:
+        url: https://download.cirros-cloud.net/0.6.2/cirros-0.6.2-x86_64-disk.img
+        dest: /tmp/cirros-0.6.2.img
+        mode: "0644"
+
+    - name: Ensure each resource exists
+      ansible.builtin.shell:
+        cmd: "{{ item.chk }} >/dev/null 2>&1 && echo EXISTS || {{ os }} {{ item.create }}"
+        executable: /bin/bash
+      loop: "{{ steps }}"
+      loop_control:
+        label: "{{ item.create.split(' ')[0:3] | join(' ') }}"
+      register: res
+      changed_when: "'EXISTS' not in res.stdout"
+
+    - name: Summary
+      ansible.builtin.shell: "{{ os }} network list; {{ os }} router list; {{ os }} network agent list"
+      args:
+        executable: /bin/bash
+      register: summary
+      changed_when: false
+    - ansible.builtin.debug:
+        var: summary.stdout_lines

@@ -1,0 +1,74 @@
+# Renders /etc/kolla/multinode + /etc/kolla/globals.yml from this repo, prepares Glance NFS.
+- name: Glance export is writable by the container's glance uid
+  hosts: g_storage
+  become: true
+  tasks:
+    - ansible.builtin.file:
+        path: "{{ glance_export_dir }}"
+        state: directory
+        owner: "{{ glance_uid }}"
+        group: "{{ glance_uid }}"
+        mode: "0755"
+      when: glance_use_nfs
+
+- name: Render Kolla configuration on the controller
+  hosts: g_control
+  become: true
+  tasks:
+    - name: Read the ZeroTier interface name written by 02-network.yml
+      ansible.builtin.slurp:
+        src: /etc/openstack-lab.env
+      register: envfile
+    - ansible.builtin.set_fact:
+        zt_iface: "{{ (envfile.content | b64decode).splitlines() | select('match', 'ZT_IFACE=') | first | split('=') | last }}"
+
+    - name: Kolla's shipped multinode inventory
+      ansible.builtin.slurp:
+        src: "{{ kolla_venv }}/share/kolla-ansible/ansible/inventory/multinode"
+      register: shipped
+    - ansible.builtin.set_fact:
+        kolla_tail: "{{ '[baremetal:children]' ~ ((shipped.content | b64decode).split('[baremetal:children]', 1)[1]) }}"
+
+    - name: /etc/kolla/multinode
+      ansible.builtin.template:
+        src: ../templates/multinode.j2
+        dest: /etc/kolla/multinode
+        owner: "{{ kolla_user }}"
+        group: "{{ kolla_user }}"
+        mode: "0644"
+
+    - name: /etc/kolla/globals.yml
+      ansible.builtin.template:
+        src: ../templates/globals.yml.j2
+        dest: /etc/kolla/globals.yml
+        owner: "{{ kolla_user }}"
+        group: "{{ kolla_user }}"
+        mode: "0644"
+
+    - name: Glance NFS mount (automount, so it waits for ZeroTier after a reboot)
+      when: glance_use_nfs
+      block:
+        - ansible.builtin.file:
+            path: "{{ glance_nfs_mount }}"
+            state: directory
+        - ansible.posix.mount:
+            path: "{{ glance_nfs_mount }}"
+            src: "storage:{{ glance_export_dir }}"
+            fstype: nfs
+            opts: "_netdev,nofail,x-systemd.automount,x-systemd.mount-timeout=60"
+            state: present
+        - ansible.builtin.systemd:
+            daemon_reload: true
+        - name: Start the automount and touch it
+          ansible.builtin.shell: "systemctl start $(systemd-escape -p --suffix=automount {{ glance_nfs_mount }}) && ls {{ glance_nfs_mount }}"
+          changed_when: false
+        - name: Write test as the glance uid
+          ansible.builtin.shell: "setpriv --reuid={{ glance_uid }} --regid={{ glance_uid }} --clear-groups sh -c 'touch {{ glance_nfs_mount }}/.t && rm {{ glance_nfs_mount }}/.t'"
+          changed_when: false
+
+    - name: Show the key settings
+      ansible.builtin.shell: "grep -E '^(kolla_internal_vip_address|network_interface|neutron_external_interface)' /etc/kolla/globals.yml; echo ---; sed -n '1,30p' /etc/kolla/multinode"
+      register: shown
+      changed_when: false
+    - ansible.builtin.debug:
+        var: shown.stdout_lines

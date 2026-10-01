@@ -1,0 +1,92 @@
+# Prepares the controller to run Kolla-Ansible. Safe to re-run.
+- name: Every node reports the same ZeroTier interface name
+  hosts: openstack_nodes
+  gather_facts: false
+  tasks:
+    - ansible.builtin.slurp:
+        src: /etc/openstack-lab.env
+      register: envfile
+    - ansible.builtin.set_fact:
+        zt_iface_found: "{{ (envfile.content | b64decode).splitlines() | select('match', 'ZT_IFACE=') | first | split('=') | last }}"
+    - name: Root disk has room for container images
+      ansible.builtin.assert:
+        that: (ansible_mounts | selectattr('mount', 'equalto', '/') | first).size_available > (min_root_free_gb * 1024 * 1024 * 1024)
+        fail_msg: "{{ inventory_hostname }}: less than {{ min_root_free_gb }} GB free on /"
+      when: ansible_mounts is defined
+    - name: Same interface everywhere (Kolla uses one network_interface value)
+      ansible.builtin.assert:
+        that: groups['openstack_nodes'] | map('extract', hostvars, 'zt_iface_found') | unique | length == 1
+      run_once: true
+
+- name: Prepare Kolla-Ansible on the controller
+  hosts: g_control
+  become: true
+  tasks:
+    - name: Is Keepalived already deployed? (then the VIP is legitimately up)
+      ansible.builtin.shell: "command -v docker >/dev/null && docker ps -a --filter name=keepalived -q || true"
+      register: kept
+      changed_when: false
+
+    - name: VIP must be FREE before the first deploy (a taken VIP is the classic cause of MariaDB/HAProxy failures)
+      ansible.builtin.command: "ping -c 2 -W 1 {{ internal_vip }}"
+      register: vip_ping
+      failed_when: vip_ping.rc == 0
+      changed_when: false
+      when: kept.stdout | length == 0
+
+    - name: Build dependencies
+      ansible.builtin.apt:
+        name: [git, python3-dev, libffi-dev, gcc, libssl-dev, python3-venv, python3-pip, jq]
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Kolla venv with pinned ansible-core, kolla-ansible and the OpenStack client
+      ansible.builtin.pip:
+        name:
+          - "ansible-core{{ ansible_core_spec }}"
+          - "kolla-ansible{{ kolla_ansible_spec }}"
+          - python-openstackclient
+        virtualenv: "{{ kolla_venv }}"
+        virtualenv_command: "python3 -m venv"
+
+    - name: /etc/kolla owned by the automation user
+      ansible.builtin.file:
+        path: /etc/kolla
+        state: directory
+        owner: "{{ kolla_user }}"
+        group: "{{ kolla_user }}"
+        mode: "0755"
+
+    - name: passwords.yml from Kolla's example (never overwritten)
+      ansible.builtin.copy:
+        src: "{{ kolla_venv }}/share/kolla-ansible/etc_examples/kolla/passwords.yml"
+        dest: /etc/kolla/passwords.yml
+        remote_src: true
+        force: false
+        owner: "{{ kolla_user }}"
+        group: "{{ kolla_user }}"
+        mode: "0600"
+
+    - name: Generate passwords (fills blanks only)
+      ansible.builtin.shell: "source {{ kolla_venv }}/bin/activate && kolla-genpwd"
+      args:
+        executable: /bin/bash
+      become_user: "{{ kolla_user }}"
+      changed_when: false
+
+    - name: Install Kolla's Galaxy dependencies
+      ansible.builtin.shell: "source {{ kolla_venv }}/bin/activate && kolla-ansible install-deps"
+      args:
+        executable: /bin/bash
+        creates: "/home/{{ kolla_user }}/.ansible/collections/ansible_collections/community/docker"
+      become_user: "{{ kolla_user }}"
+
+    - name: Versions
+      ansible.builtin.shell: "source {{ kolla_venv }}/bin/activate && kolla-ansible --version && ansible --version | head -1"
+      args:
+        executable: /bin/bash
+      register: ver
+      changed_when: false
+    - ansible.builtin.debug:
+        var: ver.stdout_lines

@@ -1,0 +1,91 @@
+# End-to-end proof: VM -> Cinder volume -> floating IP -> reachability through the router.
+- name: Workload test
+  hosts: g_control
+  gather_facts: false
+  vars:
+    os: "source {{ kolla_venv }}/bin/activate && source /etc/kolla/admin-openrc.sh && openstack"
+  tasks:
+    - name: VM
+      ansible.builtin.shell:
+        cmd: |
+            {{ os }} server show test-vm >/dev/null 2>&1 && echo EXISTS || \
+            {{ os }} server create --flavor m1.tiny --image cirros-0.6.2 --network tenant-net --key-name lab-key --wait test-vm
+        executable: /bin/bash
+      register: vm
+      changed_when: "'EXISTS' not in vm.stdout"
+
+    - name: Volume
+      ansible.builtin.shell:
+        cmd: |
+            {{ os }} volume show test-volume >/dev/null 2>&1 && echo EXISTS || {{ os }} volume create --size 1 test-volume
+        executable: /bin/bash
+      register: vol
+      changed_when: "'EXISTS' not in vol.stdout"
+
+    - name: Wait for the volume
+      ansible.builtin.shell: "{{ os }} volume show test-volume -f value -c status"
+      args: { executable: /bin/bash }
+      register: vstat
+      until: vstat.stdout in ['available', 'in-use']
+      retries: 24
+      delay: 5
+      changed_when: false
+
+    - name: Attach volume
+      ansible.builtin.shell:
+        cmd: |
+            [ "$({{ os }} volume show test-volume -f value -c status)" = "in-use" ] && echo EXISTS || {{ os }} server add volume test-vm test-volume
+        executable: /bin/bash
+      register: att
+      changed_when: "'EXISTS' not in att.stdout"
+
+    - name: Floating IP
+      ansible.builtin.shell:
+        cmd: |
+            PORT=$({{ os }} port list --server test-vm -f value -c ID | head -1)
+            if [ -n "$({{ os }} floating ip list --port $PORT -f value -c ID)" ]; then echo EXISTS; else
+              FIP=$({{ os }} floating ip create ext-net -f value -c floating_ip_address)
+              {{ os }} server add floating ip test-vm $FIP
+            fi
+        executable: /bin/bash
+      register: fip
+      changed_when: "'EXISTS' not in fip.stdout"
+
+    - name: Collect facts
+      ansible.builtin.shell:
+        cmd: |
+            PORT=$({{ os }} port list --server test-vm -f value -c ID | head -1)
+            echo "FIXED=$({{ os }} port list --server test-vm -f value -c 'Fixed IP Addresses' | grep -oP "ip_address='\K[0-9.]+" | head -1)"
+            echo "FIP=$({{ os }} floating ip list --port $PORT -f value -c 'Floating IP Address')"
+            echo "ROUTER=$({{ os }} router show demo-router -f value -c id)"
+            echo "VOL=$({{ os }} volume show test-volume -f value -c status)"
+        executable: /bin/bash
+      register: facts
+      changed_when: false
+    - ansible.builtin.set_fact:
+        t_fixed: "{{ facts.stdout_lines | select('match', 'FIXED=') | first | split('=') | last }}"
+        t_fip: "{{ facts.stdout_lines | select('match', 'FIP=') | first | split('=') | last }}"
+        t_router: "{{ facts.stdout_lines | select('match', 'ROUTER=') | first | split('=') | last }}"
+        t_vol: "{{ facts.stdout_lines | select('match', 'VOL=') | first | split('=') | last }}"
+
+    - name: Volume is in-use
+      ansible.builtin.assert:
+        that: t_vol == 'in-use'
+
+    - name: Reach the VM's fixed IP from the router namespace on compute1 (tenant path; CirrOS needs ~1 min to boot)
+      ansible.builtin.command: "docker exec neutron_l3_agent ip netns exec qrouter-{{ t_router }} ping -c 3 -W 2 {{ t_fixed }}"
+      delegate_to: compute1
+      become: true
+      register: p
+      until: p.rc == 0
+      retries: 12
+      delay: 10
+      changed_when: false
+
+    - name: Result
+      ansible.builtin.debug:
+        msg:
+          - "VM fixed IP : {{ t_fixed }}   (reachable via router: OK)"
+          - "Floating IP : {{ t_fip }}"
+          - "Volume      : {{ t_vol }}"
+          - "FINAL CHECK: from the Windows PC that hosts compute1 run:  ping {{ t_fip }}"

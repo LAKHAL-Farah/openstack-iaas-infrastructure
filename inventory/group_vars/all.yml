@@ -24,3 +24,32 @@ cinder_disk: /dev/sdb
 swift_disk: /dev/sdc
 cinder_vg: cinder-volumes
 glance_export_dir: /srv/glance-images
+
+# ================= Vol 2: Kolla-Ansible =================
+kolla_venv: /opt/kolla-venv
+kolla_user: "{{ hostvars['controller']['ansible_user'] }}"
+kolla_ansible_spec: ">=19,<20"          # 19.x = OpenStack 2024.2
+ansible_core_spec: ">=2.16,<2.18"
+openstack_release: "2024.2"
+kolla_distro: "ubuntu"
+min_root_free_gb: 12                    # Kolla container images are big
+
+# Optional services (kept off: compute1 has 9 GB RAM)
+enable_heat: "no"
+enable_swift: "no"                      # disk is prepared; ring build comes in a later volume
+
+# Glance images stored on storage's NFS export (prepared in Vol 1)
+glance_use_nfs: true
+glance_nfs_mount: /mnt/glance-images
+glance_uid: 42415                       # uid/gid of 'glance' inside Kolla containers
+
+# ---- Provider network (VMnet10) --> CHECK against VMware Virtual Network Editor / ipconfig on the compute PC
+provider_cidr: "172.24.4.0/24"
+provider_gateway: "172.24.4.1"          # = the PC's VMnet10 host adapter IP
+provider_pool_start: "172.24.4.100"
+provider_pool_end: "172.24.4.200"
+
+# ---- Self-service (tenant) network, VXLAN
+tenant_cidr: "10.20.0.0/24"
+tenant_gateway: "10.20.0.1"
+tenant_dns: "1.1.1.1"
