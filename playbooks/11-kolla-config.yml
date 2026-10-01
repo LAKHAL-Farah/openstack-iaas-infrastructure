@@ -27,7 +27,9 @@
         src: "{{ kolla_venv }}/share/kolla-ansible/ansible/inventory/multinode"
       register: shipped
     - ansible.builtin.set_fact:
-        kolla_tail: "{{ '[baremetal:children]' ~ ((shipped.content | b64decode).split('[baremetal:children]', 1)[1]) }}"
+        # Kolla puts HAProxy/Keepalived/ProxySQL on the NETWORK nodes by default. Here network = compute1,
+        # which would send every DB/API call over ZeroTier twice. Force the load balancer onto the control node.
+        kolla_tail: "{{ ('[baremetal:children]' ~ ((shipped.content | b64decode).split('[baremetal:children]', 1)[1])) | replace('[loadbalancer:children]\nnetwork', '[loadbalancer:children]\ncontrol') }}"
 
     - name: /etc/kolla/multinode
       ansible.builtin.template:
@@ -36,6 +38,12 @@
         owner: "{{ kolla_user }}"
         group: "{{ kolla_user }}"
         mode: "0644"
+
+    - name: Load balancer must be on the control node
+      ansible.builtin.shell: "grep -A1 '^\\[loadbalancer:children\\]' /etc/kolla/multinode"
+      register: lbgrp
+      changed_when: false
+      failed_when: "'control' not in lbgrp.stdout"
 
     - name: /etc/kolla/globals.yml
       ansible.builtin.template:
