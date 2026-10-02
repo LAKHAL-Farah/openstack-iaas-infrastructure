@@ -25,6 +25,31 @@ This project is a **fully automated Infrastructure-as-a-Service cloud** built fr
 
 The whole stack is **reproducible from one configuration file**. A single variables file (`inventory/group_vars/all.yml`) is the source of truth; Kolla's inventory and `globals.yml` are *generated* from it, never hand-edited. Each phase ends with a verification gate, and the finished cloud is proven with an end-to-end workload test (boot VM → attach Cinder volume → assign floating IP → reach it through the router).
 
+
+
+### Horizon dashboard
+| | |
+|---|---|
+|  ![alt text](docs/photos/1.png)<br/>**Network topology.** `ext-net`, `demo-router`, `tenant-net` and the test instance | ![Hypervisors](docs/photos/2.png) <br/>**Hypervisor summary.** compute1 vCPU, RAM and disk usage |
+| ![Instance](docs/photos/instance.png)<br/>**Instance.** `test-vm` ACTIVE with its floating IP | ![Volume](docs/photos/3.png) <br/>**Volume.** `test-volume` attached as `/dev/vdb` |
+| ![System services](docs/photos/4.png)<br/>**System information.** Compute, network and block-storage services all up | |
+### Command line
+| | |
+|---|---|
+|  ![Kolla containers](docs/photos/5.png)<br/>**Kolla containers** running on the cluster nodes | ![Services](docs/photos/6.png) <br/>**Service and agent status** from `openstack` |
+
+
+
+
+
+
+
+
+
+
+
+
+
 | | |
 |---|---|
 | **Cloud platform** | OpenStack 2024.2, every service containerised by Kolla-Ansible |
@@ -33,6 +58,8 @@ The whole stack is **reproducible from one configuration file**. A single variab
 | **Networking** | 3 isolated planes: management (ZeroTier), tenant (VXLAN), provider (flat/VLAN-free `physnet1`) |
 | **Storage** | Cinder on LVM over iSCSI · Glance images on NFS · Swift disk pre-provisioned |
 | **Operational record** | 15 documented incidents with evidence, root cause, fix and lesson |
+
+
 
 ---
 
@@ -308,36 +335,6 @@ Eleven recorded decisions, each with rationale and cost — see [docs/04-design-
 | D11 | Safety rails in automation | A few more assertions |
 
 ---
-## Proof it works: screenshots
-
-All captures are from the running lab. Files are in [`docs/images/`](docs/images/).
-
-### Horizon dashboard
-| | |
-|---|---|
-|  ![alt text](docs/photos/1.png)<br/>**Network topology.** `ext-net`, `demo-router`, `tenant-net` and the test instance | ![Hypervisors](docs/photos/2.png) <br/>**Hypervisor summary.** compute1 vCPU, RAM and disk usage |
-| ![Instance](docs/photos/instance.png)<br/>**Instance.** `test-vm` ACTIVE with its floating IP | ![Volume](docs/photos/3.png) <br/>**Volume.** `test-volume` attached as `/dev/vdb` |
-| ![System services](docs/photos/4.png)<br/>**System information.** Compute, network and block-storage services all up | |
-### Command line
-| | |
-|---|---|
-|  ![Kolla containers](docs/photos/5.png)<br/>**Kolla containers** running on the cluster nodes | ![Services](docs/photos/6.png) <br/>**Service and agent status** from `openstack` |
-## Skills demonstrated
-
-| Area | Evidence in this repo |
-|---|---|
-| **Cloud / IaaS** | Deployed and operated Keystone, Nova, Neutron, Glance, Cinder, Placement, Horizon |
-| **Infrastructure as Code** | Ansible playbooks, Jinja2 templating, idempotent design, `make` orchestration |
-| **Containers** | Kolla-Ansible container lifecycle, image pre-pull, health checks, `docker exec` debugging |
-| **Software-defined networking** | Open vSwitch, VXLAN, flat provider networks, Neutron routers, namespaces, floating IPs |
-| **Message queues** | RabbitMQ/AMQP role in OpenStack RPC, heartbeats, agent liveness, failure behaviour |
-| **High-availability patterns** | HAProxy + Keepalived VIP, health-check-driven failover, honest single-node trade-offs |
-| **Storage** | LVM, iSCSI (tgt/iscsid), NFS, GPT/XFS provisioning for Swift |
-| **Linux & virtualisation** | KVM/libvirt, nested virtualisation, netplan, sysctl, systemd, routing tables |
-| **Troubleshooting** | Packet captures per interface, per-namespace route inspection, log triage, root-cause write-ups |
-| **Engineering discipline** | Verification gates, safety assertions, pinned dependencies, documented decisions |
-
----
 
 ## Quick start
 
@@ -400,7 +397,7 @@ Dashboard: `http://10.0.1.5` (Horizon, via the Keepalived VIP).
 
 ---
 
-## Known limitations (stated honestly)
+## Known limitations 
 
 - **Single controller.** The VIP/HAProxy/Keepalived pattern is implemented, but with one control node it is a demonstration of the pattern, not real redundancy. MariaDB and RabbitMQ are single instances.
 - **Combined compute + network node.** `compute1` is a shared failure domain for VMs and routing.
@@ -408,20 +405,10 @@ Dashboard: `http://10.0.1.5` (Horizon, via the Keepalived VIP).
 - **Not enabled yet:** Swift (disk prepared), Cinder backup, Heat.
 - **Lab credentials/IDs:** `zt_network_id` in `group_vars/all.yml` is a placeholder to replace.
 
-## Roadmap
-
-- [ ] Ring-build and enable **Swift** object storage
-- [ ] Add a Cinder backup backend, then re-enable `cinder-backup`
-- [ ] Add a second controller for a true HA control plane (clustered MariaDB + RabbitMQ)
-- [ ] Add a second compute node and exercise live migration
-- [ ] Enable **Heat** for orchestration templates
-- [ ] Observability stack (Prometheus / Grafana)
-- [ ] Automate Phase 4 as a playbook
-
 ---
 
 <div align="center">
 
-**Built, broken, debugged and documented — every decision and incident is recorded in [`docs/`](docs/).**
+**Built, debugged and documented — every decision and incident is recorded in [`docs/`](docs/).**
 
 </div>
